@@ -2,25 +2,24 @@
 #include "raylib.h"
 
 #define SAMPLE_RATE 44100
+#define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 #define STREAM_BUFFER_SIZE 1024
 #define NUM_OSCILLATORS 16
-#define SAMPLE_DURATION (1.0f / SAMPLE_RATE)
 
 typedef struct {
     float phase;
-    float phase_stride;
+    float freq;
+    float amplitude;
 } Oscillator;
 
-void setOscFrequency(Oscillator* osc, float frequency)
-{
-    osc->phase_stride = frequency * SAMPLE_DURATION;
-}
 
-void updateOsc(Oscillator* osc)
+void updateOsc(Oscillator* osc, float freq_modulation)
 {
-    osc->phase += osc->phase_stride;
+    osc->phase += ((osc->freq + freq_modulation) * SAMPLE_DURATION);
     if(osc->phase >=  1.0f)
         osc->phase -= 1.0f;
+    if(osc->phase < 0.0f)
+        osc->phase += 1.0f;
 }
 
 void zeroSignal(float* signal)
@@ -32,14 +31,15 @@ void zeroSignal(float* signal)
 
 float sineWaveOsc(Oscillator* osc)
 {
-    return sinf(2.0f * PI * osc->phase);
+    return sinf(2.0f * PI * osc->phase) * osc->amplitude;
 }
 
-void accumulateSignal(float* signal, Oscillator* osc, float amplitude)
+void accumulateSignal(float* signal, Oscillator* osc, Oscillator* lfo)
 {
     for (size_t t = 0; t < STREAM_BUFFER_SIZE; t++) {
-        updateOsc(osc);
-        signal[t] += sineWaveOsc(osc) * amplitude;
+        updateOsc(lfo, 0.0f);
+        updateOsc(osc, sineWaveOsc(lfo));
+        signal[t] += sineWaveOsc(osc);
     }
 }
 
@@ -58,34 +58,30 @@ int main()
     SetAudioStreamVolume(synthStream, 0.05f);
     PlayAudioStream(synthStream);
 
-    float frequency = 440.0f;
-    float sample_duration = (1.0f/(float)sample_rate);
-
     Oscillator osc[NUM_OSCILLATORS] = {0};
     Oscillator lfo = {.phase = 0.0f};
-    setOscFrequency(&lfo, 60.0f * 1024);
-
+    lfo.freq = 3.0f;
+    lfo.amplitude = 50.0f;
     float signal[STREAM_BUFFER_SIZE];
 
     while (WindowShouldClose() == false)
     {
         Vector2 mouse_pos = GetMousePosition();
         float normalized_mouse_x = (mouse_pos.x / (float)screen_width);
+        float base_freq = 25.0f + (normalized_mouse_x * 400.0f);
 
         if(IsAudioStreamProcessed(synthStream))
         {
             zeroSignal(signal);
-            updateOsc(&lfo);
-            float base_freq = 25.0f + (normalized_mouse_x * 400.0f) + (sineWaveOsc(&lfo) * 50.0f);
             for (size_t i = 0; i < NUM_OSCILLATORS; ++i)
             {
                 if(i % 2 != 0)
                 {
                     //float normalized_index = (float)i / NUM_OSCILLATORS;
-                    frequency = base_freq * (float)i;
-                    float phase_stride = frequency * sample_duration;
-                    osc[i].phase_stride = phase_stride;
-                    accumulateSignal(signal, &osc[i], 1.0f / NUM_OSCILLATORS);
+                    const float frequency = base_freq * (float)i;
+                    osc[i].freq = base_freq * (float) i;
+                    osc[i].amplitude = 1.0f / NUM_OSCILLATORS;
+                    accumulateSignal(signal, &osc[i], &lfo);
                 }
             }
             UpdateAudioStream(synthStream, signal, STREAM_BUFFER_SIZE);
@@ -93,10 +89,10 @@ int main()
 
         BeginDrawing();
         ClearBackground(BLACK);
-        DrawText(TextFormat("Freq: %f", frequency), 100, 100, 20, RED);
         for (size_t i = 0; i < 1024; i++) {
             DrawPixel((int )i, (728/2) + (int)(signal[i] * 100), RED);
         }
+        DrawFPS(10,10);
         EndDrawing();
     }
 
